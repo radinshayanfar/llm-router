@@ -1,15 +1,16 @@
-# Transparent Proxy Server
+# Routing Proxy Server
 
-A simple transparent proxy server built with Flask that forwards all incoming requests to a configured target domain while preserving paths, headers, and request methods.
+A Flask-based HTTP proxy that routes incoming requests to different target domains based on configurable criteria (URL path, HTTP method, and JSON body field values). Each route can also rewrite the JSON request body before forwarding.
 
 ## Features
 
-- Forwards all HTTP methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
-- Preserves request paths and query parameters
-- Forwards request headers and body
-- Returns responses from the target domain
-- Configurable via environment variables
-- **JSON request modification** – add, overwrite, or remove keys at any nesting level before forwarding
+- **Content-based routing** – match on any JSON body field (e.g. `model`, `user.tier`, …)
+- **Path & method matching** – route by URL pattern and HTTP method
+- **Multiple body conditions** – combine conditions; all must pass for a route to match
+- **JSON body modifications** – add, overwrite, or remove keys at any nesting level
+- **Default route** – evaluated in order like any other route; also acts as the ultimate fallback if no route matches
+- **Hot-reload** – edit `routes.json` without restarting the proxy
+- Forwards all HTTP methods, headers, query params, cookies, and the request body unchanged (unless modified by rules)
 
 ## Installation
 
@@ -19,117 +20,112 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Usage
-
 ```bash
-# Set the target domain
-export TARGET_DOMAIN=https://api.example.com
-
-# Run the proxy
+cp routes.example.json routes.json   # create and edit your routes
+cp .env.example .env                  # optional: configure host/port/file path
 python proxy.py
 ```
 
-The proxy will start on `http://0.0.0.0:5000` by default.
+The proxy starts on `http://0.0.0.0:5000` by default.
 
-### Configuration
+### Environment variables
 
-Configure the proxy using environment variables:
+| Variable | Default | Description |
+|---|---|---|
+| `PROXY_HOST` | `0.0.0.0` | Host to bind the proxy server |
+| `PROXY_PORT` | `5000` | Port to bind the proxy server |
+| `ROUTES_FILE` | `routes.json` | Path to the routes configuration file |
 
-- `TARGET_DOMAIN`: The target domain to forward requests to (default: `https://example.com`)
-- `PROXY_HOST`: Host to bind the proxy server (default: `0.0.0.0`)
-- `PROXY_PORT`: Port to bind the proxy server (default: `5000`)
-- `JSON_RULES_FILE`: Path to the JSON modification rules file (default: `json_rules.json`)
+## Routes configuration
 
-### Examples
-
-```bash
-# Forward to a specific API
-export TARGET_DOMAIN=https://jsonplaceholder.typicode.com
-python proxy.py
-
-# Now you can access:
-# http://localhost:5000/posts → https://jsonplaceholder.typicode.com/posts
-# http://localhost:5000/users/1 → https://jsonplaceholder.typicode.com/users/1
-```
-
-```bash
-# Custom host and port
-export TARGET_DOMAIN=https://api.github.com
-export PROXY_HOST=127.0.0.1
-export PROXY_PORT=8080
-python proxy.py
-```
-
-## JSON Request Modification
-
-The proxy can rewrite JSON request bodies **before** forwarding them. This lets you add, overwrite, or remove any key at any nesting level without touching the client or the upstream server.
-
-### Setup
-
-```bash
-cp json_rules.example.json json_rules.json
-# edit json_rules.json to define your rules
-```
-
-The rules file is **hot-reloaded** – changes take effect immediately without restarting the proxy.
-
-### Rules file format
+All routing and modification logic lives in a single `routes.json` file (see `routes.example.json` for a full example).
 
 ```json
 {
-  "rules": [
+  "routes": [
     {
+      "name":   "Model-A",
+      "target": "https://api-model-a.example.com",
       "match": {
-        "path_pattern": "^/api/users",
-        "methods": ["POST", "PUT"]
+        "path_pattern": ".*",
+        "methods": ["POST"],
+        "body": [
+          { "key_path": "model", "operator": "eq", "value": "Model-A" }
+        ]
       },
       "modifications": [
-        { "action": "set",    "key_path": "role",              "value": "guest"   },
-        { "action": "set",    "key_path": "meta.source",       "value": "proxy"   },
-        { "action": "remove", "key_path": "sensitive_token"                        },
-        { "action": "remove", "key_path": "user.password_hint"                     }
+        { "action": "set",    "key_path": "proxy_injected", "value": true },
+        { "action": "remove", "key_path": "internal_token" }
       ]
+    },
+    {
+      "name":    "Default",
+      "default": true,
+      "target":  "https://fallback.example.com",
+      "modifications": []
     }
   ]
 }
 ```
 
+### Route fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | no | Human-readable label shown in logs |
+| `target` | **yes** | Base URL of the upstream server |
+| `default` | no | `true` → marks this route as the fallback; it is still evaluated in order with its own `match` criteria (omit `match` to match everything) |
+| `match` | no | Criteria for selecting this route (see below) |
+| `modifications` | no | Body rewrite rules applied before forwarding |
+
+### Match criteria
+
+All conditions in `match` must pass. Omitting a field means "match anything".
+
 | Field | Description |
 |---|---|
-| `match.path_pattern` | Regular expression matched against the request path (default: `.*`) |
-| `match.methods` | HTTP methods this rule applies to (default: all methods) |
-| `modifications[].action` | `"set"` to add/overwrite, `"remove"` to delete |
-| `modifications[].key_path` | Dot-notation path to the target key, e.g. `"user.address.city"` |
-| `modifications[].value` | Value to set (any JSON type). Required for `"set"`, ignored for `"remove"` |
+| `path_pattern` | Regex matched against the request path (default: `.*`) |
+| `methods` | HTTP method whitelist, e.g. `["POST", "PUT"]` (default: all methods) |
+| `body` | List of body conditions – **all** must be satisfied |
 
-**Dot-notation** allows targeting keys at any depth. When using `"set"`, intermediate objects are created automatically if they don't exist.
+Routes are evaluated **in order**; the first fully-matching route is used. A route marked `"default": true` is evaluated just like any other route in its position, but is also remembered as the ultimate fallback — if it is placed last with no `match` criteria it naturally catches everything, while still allowing it to appear earlier with its own conditions.
+
+### Body conditions
 
 ```json
-// Input body
-{ "user": { "name": "Alice" }, "token": "secret" }
-
-// Rule: set "user.role" = "admin", remove "token"
-// Output body forwarded to upstream
-{ "user": { "name": "Alice", "role": "admin" } }
+{ "key_path": "user.tier", "operator": "eq", "value": "premium" }
 ```
 
-Rules are evaluated in order; multiple rules can match the same request and all matching modifications are applied.
+| Field | Description |
+|---|---|
+| `key_path` | Dot-notation path into the JSON body, e.g. `"model"` or `"user.tier"` |
+| `operator` | See table below (default: `"eq"`) |
+| `value` | Expected value (not needed for `exists` / `not_exists`) |
 
-## How It Works
+| Operator | Passes when… |
+|---|---|
+| `eq` | `body[key_path] == value` |
+| `ne` | `body[key_path] != value` |
+| `in` | `body[key_path]` is a member of the `value` list, e.g. `"value": ["Model-A", "Model-B"]` |
+| `contains` | `value` is a substring of `body[key_path]` (both strings) |
+| `regex` | `value` regex matches `body[key_path]` |
+| `exists` | the key is present in the body |
+| `not_exists` | the key is absent from the body |
 
-1. The proxy receives an incoming request
-2. It constructs the target URL by combining the `TARGET_DOMAIN` with the request path
-3. It forwards the request with the same method, headers, body, and query parameters
-4. It receives the response from the target domain
-5. It returns the response to the client with the same status code and headers
+### Body modifications
 
-## Production Deployment
+| Field | Description |
+|---|---|
+| `action` | `"set"` to add/overwrite, `"remove"` to delete |
+| `key_path` | Dot-notation path, e.g. `"metadata.source"` |
+| `value` | Value to set (any JSON type). Required for `"set"`, ignored for `"remove"` |
 
-For production use, consider using a WSGI server like Gunicorn:
+Intermediate objects are created automatically when using `"set"` on a nested path.
+
+## Production deployment
 
 ```bash
 pip install gunicorn
-export TARGET_DOMAIN=https://your-target-domain.com
 gunicorn -w 4 -b 0.0.0.0:5000 proxy:app
 ```
 

@@ -1,0 +1,106 @@
+{
+  "_comment": "Copy this file to routes.json and edit it to configure your routes.",
+  "routes": [
+    {
+      "_comment": "Route 1 – requests whose JSON body has 'model' == 'Model-A'.",
+      "name": "Model-A",
+      "target": "https://api-model-a.example.com",
+      "match": {
+        "path_pattern": ".*",
+        "methods": ["POST", "PUT", "PATCH"],
+        "body": [
+          {
+            "_comment": "Match when the top-level 'model' field equals 'Model-A'.",
+            "key_path": "model",
+            "operator": "eq",
+            "value": "Model-A"
+          }
+        ]
+      },
+      "modifications": [
+        {
+          "_comment": "Inject a tracing field so the upstream knows the request came through the proxy.",
+          "action": "set",
+          "key_path": "proxy_injected",
+          "value": true
+        },
+        {
+          "_comment": "Remove a sensitive field before forwarding.",
+          "action": "remove",
+          "key_path": "internal_token"
+        }
+      ]
+    },
+    {
+      "_comment": "Route 2 – match any of several models using the 'in' operator.",
+      "name": "Model-B or Model-C",
+      "target": "https://api-model-b.example.com",
+      "match": {
+        "path_pattern": ".*",
+        "methods": ["POST", "PUT", "PATCH"],
+        "body": [
+          {
+            "_comment": "Match when 'model' is one of the listed values.",
+            "key_path": "model",
+            "operator": "in",
+            "value": ["Model-B", "Model-C"]
+          }
+        ]
+      },
+      "modifications": [
+        {
+          "action": "set",
+          "key_path": "proxy_injected",
+          "value": true
+        }
+      ]
+    },
+    {
+      "_comment": "Route 3 – path + method matching only (no body conditions). Applies to all POST requests to /api/orders/...",
+      "name": "Orders API",
+      "target": "https://orders.example.com",
+      "match": {
+        "path_pattern": "^/api/orders",
+        "methods": ["POST", "PUT", "PATCH"]
+      },
+      "modifications": [
+        {
+          "action": "set",
+          "key_path": "payment.currency",
+          "value": "USD"
+        },
+        {
+          "action": "remove",
+          "key_path": "payment.discount_code"
+        }
+      ]
+    },
+    {
+      "_comment": "Route 4 – multiple body conditions (all must match).",
+      "name": "Premium users on Model-A",
+      "target": "https://premium-api.example.com",
+      "match": {
+        "path_pattern": ".*",
+        "methods": ["POST"],
+        "body": [
+          { "key_path": "model",      "operator": "eq",       "value": "Model-A" },
+          { "key_path": "user.tier",  "operator": "eq",       "value": "premium" }
+        ]
+      },
+      "modifications": []
+    },
+    {
+      "_comment": "Default route – evaluated in order like any other route (no match criteria here means it matches everything). Also acts as the ultimate fallback if all routes above somehow fail to return a match.",
+      "name": "Default",
+      "default": true,
+      "target": "https://fallback.example.com",
+      "modifications": [
+        {
+          "action": "set",
+          "key_path": "routed_by",
+          "value": "default"
+        }
+      ]
+    }
+  ]
+}
