@@ -7,6 +7,7 @@ A Flask-based HTTP proxy that routes incoming requests to different target domai
 - **Content-based routing** – match on any JSON body field (e.g. `model`, `user.tier`, …)
 - **Path & method matching** – route by URL pattern and HTTP method
 - **Multiple body conditions** – combine conditions; all must pass for a route to match
+- **Request header injection** – add or overwrite headers per route before forwarding
 - **JSON body modifications** – add, overwrite, or remove keys at any nesting level
 - **Default route** – evaluated in order like any other route; also acts as the ultimate fallback if no route matches
 - **Hot-reload** – edit `routes.json` without restarting the proxy
@@ -76,6 +77,7 @@ All routing and modification logic lives in a single `routes.json` file (see `ro
 | `target` | **yes** | Base URL of the upstream server |
 | `default` | no | `true` → marks this route as the fallback; it is still evaluated in order with its own `match` criteria (omit `match` to match everything) |
 | `match` | no | Criteria for selecting this route (see below) |
+| `headers` | no | Key-value map of headers to add/overwrite on the forwarded request |
 | `modifications` | no | Body rewrite rules applied before forwarding |
 
 ### Match criteria

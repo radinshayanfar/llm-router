@@ -255,6 +255,11 @@ def proxy(path):
     # Prepare headers
     headers = {key: value for key, value in request.headers if key.lower() not in ['host', 'connection']}
 
+    # Inject/overwrite route-level headers
+    route_headers = route.get('headers', {})
+    if route_headers:
+        headers.update(route_headers)
+
     # Apply body modifications (only when we have a parsed JSON dict)
     if is_json and body_data is not None:
         if apply_modifications(body_data, route.get('modifications', [])):

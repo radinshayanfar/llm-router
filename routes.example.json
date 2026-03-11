@@ -17,6 +17,11 @@
           }
         ]
       },
+      "headers": {
+        "_comment": "Headers added/overwritten on the forwarded request.",
+        "Authorization": "Bearer secret-token-for-model-a",
+        "X-Proxy-Route": "model-a"
+      },
       "modifications": [
         {
           "_comment": "Inject a tracing field so the upstream knows the request came through the proxy.",
@@ -46,6 +51,9 @@
             "value": ["Model-B", "Model-C"]
           }
         ]
+      },
+      "headers": {
+        "Authorization": "Bearer secret-token-for-model-b-c"
       },
       "modifications": [
         {
