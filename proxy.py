@@ -271,31 +271,55 @@ def proxy(path):
     if request.query_string:
         target_url += f"?{request.query_string.decode('utf-8')}"
 
-    # Forward the request
+    # Forward the request.
+    #
+    # ``timeout=(connect, read)`` is critical: without a read timeout the
+    # request can block forever waiting on a stalled upstream. While that
+    # handler thread is blocked, the downstream socket sits idle. If the
+    # downstream client (which has its own timeout) gives up and sends FIN,
+    # the kernel transitions the socket to CLOSE-WAIT — but our handler is
+    # not reading from it (it's stuck in the upstream call), so we never
+    # call ``close()`` and the fd leaks until upstream finally returns.
+    # Observed in practice as growing CLOSE-WAIT counts on this server's
+    # listening port. The 600s read timeout matches the agent's per-call
+    # upper bound.
     try:
-        response = requests.request(
+        upstream = requests.request(
             method=request.method,
             url=target_url,
             headers=headers,
             data=body,
             cookies=request.cookies,
             allow_redirects=False,
-            stream=True
+            stream=True,
+            timeout=(10, 600),
         )
-
-        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-        response_headers = [
-            (name, value) for name, value in response.raw.headers.items()
-            if name.lower() not in excluded_headers
-        ]
-
-        route_name = route.get('name', target_domain)
-        print(f"[proxy] {request.method} {request_path} → {target_domain} (route: {route_name}) [{response.status_code}]")
-
-        return Response(response.content, status=response.status_code, headers=response_headers)
-
     except requests.exceptions.RequestException as e:
         return Response(f"Proxy Error: {str(e)}", status=502)
+
+    excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+    response_headers = [
+        (name, value) for name, value in upstream.raw.headers.items()
+        if name.lower() not in excluded_headers
+    ]
+
+    route_name = route.get('name', target_domain)
+    print(f"[proxy] {request.method} {request_path} → {target_domain} (route: {route_name}) [{upstream.status_code}]")
+
+    # Stream the body to the client instead of buffering it whole. This way
+    # if the downstream client closes mid-response, the next ``write()`` from
+    # werkzeug raises BrokenPipeError, the generator's ``finally`` runs, and
+    # the upstream connection is released. Buffering with ``response.content``
+    # would force us to fully drain upstream before noticing — same hang.
+    def _stream():
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return Response(_stream(), status=upstream.status_code, headers=response_headers)
 
 
 if __name__ == '__main__':
